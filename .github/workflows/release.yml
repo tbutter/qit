@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Run Tests
+        run: go test -v ./...
+
+  build-release:
+    name: Build & Upload Release Binaries
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w" -o qit .
+
+      - name: Package Release Asset
+        run: |
+          # Determine the release version tag
+          TAG_NAME="${{ github.event.release.tag_name }}"
+          # Fallback to ref name if tag_name is not available (e.g. manual dispatch)
+          if [ -z "$TAG_NAME" ]; then
+            TAG_NAME="${{ github.ref_name }}"
+          fi
+          # Sanitize tag name (replace slashes with hyphens)
+          TAG_NAME=$(echo "$TAG_NAME" | sed 's/\//-/g')
+          
+          ARCHIVE_NAME="qit-${TAG_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          
+          # Package the binary, LICENSE, and README.md
+          tar -czf "$ARCHIVE_NAME" qit LICENSE README.md
+          
+          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $GITHUB_ENV
+
+      - name: Upload Release Asset
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
